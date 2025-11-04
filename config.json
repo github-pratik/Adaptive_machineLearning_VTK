@@ -1,0 +1,18 @@
+{
+  "parima": {
+    "enabled": true,
+    "apiUrl": "http://localhost:5001/api/parima/predict",
+    "modelPath": "./ml_models/PARIMA/model_checkpoint.pkl",
+    "featureSampleIntervalMs": 3000,
+    "viewportHistorySize": 10,
+    "tiles": {
+      "basePath": "./tiles",
+      "lodLevels": ["lod0", "lod1", "lod2", "lod3", "lod4", "lod5"]
+    },
+    "logging": {
+      "enabled": false,
+      "logFile": "parima_decisions_log.csv"
+    }
+  }
+}
+
