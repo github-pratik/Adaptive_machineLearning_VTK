@@ -1,0 +1,76 @@
+================================================================================
+PARIMA (RandomForest) vs LSTM Model Comparison
+================================================================================
+
+Generated: 2025-11-13 22:47:48
+
+TRAINING DATA
+--------------------------------------------------------------------------------
+Total samples: 1819
+Features: 35
+LOD distribution:
+  LOD 0: 200 (11.0%)
+  LOD 1: 200 (11.0%)
+  LOD 2: 436 (24.0%)
+  LOD 3: 216 (11.9%)
+  LOD 4: 554 (30.5%)
+  LOD 5: 213 (11.7%)
+
+RANDOM FOREST (PARIMA) RESULTS
+--------------------------------------------------------------------------------
+Accuracy: 0.8626
+Training samples: 1455
+Test samples: 364
+Model path: ../model_comparison/random_forest_model.pkl
+
+Test Set Distribution:
+  LOD 0: 40 (11.0%)
+  LOD 1: 40 (11.0%)
+  LOD 2: 87 (23.9%)
+  LOD 3: 43 (11.8%)
+  LOD 4: 111 (30.5%)
+  LOD 5: 43 (11.8%)
+
+LSTM RESULTS
+--------------------------------------------------------------------------------
+Single Split Accuracy: 0.2238
+Training samples: 1447
+Test samples: 362
+Model path: ../model_comparison/lstm_model.pkl
+
+Cross-Validation Results (5 folds):
+  Mean Accuracy: 0.1289
+  Std Deviation: 0.1381
+  Min Accuracy: 0.0000
+  Max Accuracy: 0.3223
+
+  Fold Details:
+    Fold 1: 0.2691 (Test: 301 samples)
+    Fold 2: 0.0465 (Test: 301 samples)
+    Fold 3: 0.0000 (Test: 301 samples)
+    Fold 4: 0.0066 (Test: 301 samples)
+    Fold 5: 0.3223 (Test: 301 samples)
+
+Test Set Distribution (Single Split):
+  LOD 4: 162 (44.8%)
+  LOD 5: 200 (55.2%)
+
+⚠️  Warnings:
+  ⚠️  Test set missing 4 class(es) present in training
+
+COMPARISON
+--------------------------------------------------------------------------------
+Single Split Accuracy Difference: -0.6389 (LSTM - RandomForest)
+RandomForest advantage: +285.52%
+
+LSTM Cross-Validation Mean: 0.1289 (±0.1381)
+CV vs RandomForest: -0.7337
+
+RECOMMENDATION
+--------------------------------------------------------------------------------
+✅ RandomForest performs better - current PARIMA is optimal
+   Benefits: Faster inference, smaller model size, simpler
+
+⚠️  LSTM Test Set Issues:
+   ⚠️  Test set missing 4 class(es) present in training
+   → Single split accuracy may be unreliable

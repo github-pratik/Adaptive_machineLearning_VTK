@@ -2,7 +2,7 @@
 
 **A web-based, real-time collaborative platform for immersive scientific data visualization and analysis with intelligent adaptive streaming.**
 
-CIA_Web leverages **VTK.js**, **WebXR**, **TensorFlow.js**, and **PARIMA** (Predictive Adaptive Rendering for Immersive Media Applications) to support multi-user interaction, high-dimensional data exploration, and intelligent Level-of-Detail (LOD) management in both desktop and VR environments.
+
 
 ---
 
@@ -73,21 +73,40 @@ Machine_CIA_Web-main/
 ├── ml_adapter/              # ML model adapters
 │   └── parima_adapter.js    # PARIMA backend API client
 │
-├── ml_models/               # Machine learning models
+├── model_comparison/         # Trained models and comparison results
+│   ├── random_forest_model.pkl  # RandomForest (PARIMA) model
+│   ├── lstm_model.pkl           # LSTM model
+│   └── model_comparison_report.txt  # Comparison report
+│
+├── model_comparison_plots/   # Visualization plots
+│   ├── 1_accuracy_comparison.png
+│   ├── 2_cv_comparison.png
+│   ├── 3_model_characteristics.png
+│   ├── 4_accuracy_distribution.png
+│   ├── 5_accuracy_boxplot.png
+│   └── 6_runtime_metrics_boxplot.png
+│
+├── ml_models/               # Legacy model location
 │   └── PARIMA/
-│       ├── model_checkpoint.pkl  # Trained PARIMA model
-│       └── ...                  # Reference implementations
+│       └── model_checkpoint.pkl  # Old model location
 │
 ├── backend/                  # Python backend API
-│   ├── parima_api.py        # Flask API server
+│   ├── parima_api.py        # Flask API server with auto-training
 │   ├── train_model.py       # Model training script
-│   ├── test_integration.py  # Integration tests
-│   ├── test_api.py          # API endpoint tests
+│   ├── compare_models.py    # Model comparison script
+│   ├── generate_model_comparison_plots.py  # Plot generation
+│   ├── generate_synthetic_dataset.py  # Synthetic data generation
+│   ├── merge_training_data.py  # Data merging utility
+│   ├── diagnose_model.py    # Model diagnostics tool
+│   ├── gpu_metrics.py       # GPU metrics collection
 │   ├── verify_setup.sh      # Setup verification
 │   ├── start_backend.sh     # Startup helper
 │   ├── requirements.txt     # Python dependencies
 │   ├── README_TRAINING.md   # Training guide
-│   └── TESTING.md           # Testing guide
+│   └── model_comparison/    # Trained models directory
+│       ├── random_forest_model.pkl
+│       ├── lstm_model.pkl
+│       └── model_comparison_report.txt
 │
 ├── tiles/                    # Pre-tiled VTP files (user-provided)
 │   └── {model_name}/
@@ -101,6 +120,9 @@ Machine_CIA_Web-main/
 ├── vtp_files/               # Sample VTP datasets
 ├── data/                     # Training data and logs
 │   └── training_logs/       # Collected decision logs
+│       ├── parima_decisions_log.csv  # PARIMA/RandomForest data
+│       ├── lstm_decisions_log.csv    # LSTM data
+│       └── README.md        # Data collection guide
 │
 ├── config.json              # PARIMA configuration
 ├── package.json             # Node.js dependencies
@@ -141,9 +163,13 @@ PARIMA (Predictive Adaptive Rendering for Immersive Media Applications) uses mac
 ### Features
 
 - **6 LOD Levels** (0-5): From highest detail (LOD 0) to lowest detail (LOD 5)
-- **Intelligent Prediction**: ML model predicts optimal LOD every 500ms
+- **Dual Model Support**: RandomForest (PARIMA) and LSTM models for comparison
+- **Intelligent Prediction**: ML model predicts optimal LOD every 3 seconds (configurable)
 - **Adaptive Performance**: Maintains target FPS by adjusting quality
 - **Real-Time Monitoring**: Live metrics dashboard in control panel
+- **Model Comparison**: Compare RandomForest vs LSTM performance with visualization plots
+- **Automatic Training**: Background auto-retraining based on collected data
+- **Training History**: Comprehensive logging of all training events
 
 ### Setup Guide
 
@@ -155,16 +181,23 @@ PARIMA (Predictive Adaptive Rendering for Immersive Media Applications) uses mac
    pip3 install -r requirements.txt
    ```
 
-2. **Train or place model:**
+2. **Train models:**
    ```bash
-   # Option 1: Train with synthetic data
+   # Option 1: Train and compare both RandomForest and LSTM models
+   python3 compare_models.py \
+     --data ../data/training_logs/parima_decisions_log.csv \
+     --output-dir ../model_comparison
+   
+   # Option 2: Train individual model with synthetic data
    python3 train_model.py --synthetic --samples 1000
    
-   # Option 2: Train with real data
+   # Option 3: Train individual model with real data
    python3 train_model.py --data ../data/training_logs/parima_decisions_log.csv
    ```
    
-   The trained model will be saved to `ml_models/PARIMA/model_checkpoint.pkl`
+   Trained models will be saved to:
+   - `model_comparison/random_forest_model.pkl` (RandomForest/PARIMA)
+   - `model_comparison/lstm_model.pkl` (LSTM)
 
 3. **Start backend API:**
    ```bash
@@ -186,30 +219,46 @@ Edit `config.json` to configure PARIMA:
   "parima": {
     "enabled": true,
     "apiUrl": "http://localhost:5001/api/parima/predict",
-    "modelPath": "./ml_models/PARIMA/model_checkpoint.pkl",
-    "featureSampleIntervalMs": 5000,
+    "modelPath": "./model_comparison/random_forest_model.pkl",
+    "featureSampleIntervalMs": 3000,
     "viewportHistorySize": 10,
     "tiles": {
       "basePath": "./tiles",
       "lodLevels": ["lod0", "lod1", "lod2", "lod3", "lod4", "lod5"]
     },
     "logging": {
-      "enabled": false,
-      "logFile": "parima_decisions_log.csv"
+      "enabled": true,
+      "logFile": "./data/training_logs/parima_decisions_log.csv"
+    },
+    "training": {
+      "autoTrain": false,
+      "minSamplesForTraining": 100,
+      "logFile": "./data/training_logs/parima_decisions_log.csv",
+      "modelType": "random_forest"
     }
   }
 }
 ```
 
+**To use LSTM model instead:**
+- Change `modelPath` to: `"./model_comparison/lstm_model.pkl"`
+- Change `logFile` to: `"./data/training_logs/lstm_decisions_log.csv"`
+- Change `modelType` to: `"lstm"`
+
 **Configuration Options:**
 - `enabled`: Enable/disable PARIMA streaming
 - `apiUrl`: Backend API endpoint URL
-- `featureSampleIntervalMs`: Decision frequency in milliseconds (default: 5000ms)
+- `featureSampleIntervalMs`: Decision frequency in milliseconds (default: 3000ms)
 - `viewportHistorySize`: Number of camera states to track (default: 10)
 - `tiles.basePath`: Base directory for tile files
 - `tiles.lodLevels`: Available LOD level names (6 levels: 0-5)
 - `logging.enabled`: Enable automatic CSV downloads
 - `logging.logFile`: Output filename for CSV logs
+- `training.autoTrain`: Enable automatic background training (default: false)
+- `training.autoTrainIntervalHours`: Hours between auto-training checks (default: 24)
+- `training.minSamplesForTraining`: Minimum samples required before training (default: 100)
+- `training.modelType`: Model type: `random_forest`, `lstm`, `svm`, or `logistic`
+- `training.trainingLogFile`: Path to training history log file
 
 #### 3. Usage
 
@@ -235,31 +284,101 @@ Edit `config.json` to configure PARIMA:
 
 #### 4. Collecting Training Data
 
-To collect real-world data for model training:
+To collect real-world data for model training and comparison:
 
-1. **Enable logging in `config.json`:**
+**For PARIMA (RandomForest) Data:**
+1. **Update `config.json`:**
    ```json
-   "logging": {
-     "enabled": true,
-     "logFile": "parima_decisions_log.csv"
+   {
+     "modelPath": "./model_comparison/random_forest_model.pkl",
+     "logging": {
+       "enabled": true,
+       "logFile": "./data/training_logs/parima_decisions_log.csv"
+     }
    }
    ```
 
-2. **Use the application** for 10-15 minutes:
-   - Load different VTP files
-   - Move camera around
-   - Interact with the 3D model
+2. **Start backend and frontend**, use application for 15-20 minutes
+3. **Save CSV** to `data/training_logs/parima_decisions_log.csv`
 
-3. **Export logs:**
-   - When buffer reaches 100 entries, CSV downloads automatically
-   - Or click "Copy Logs" button in the UI
-   - Save CSV files to `data/training_logs/`
-
-4. **Train model with real data:**
-   ```bash
-   cd backend
-   python3 train_model.py --data ../data/training_logs/parima_decisions_log.csv
+**For LSTM Data:**
+1. **Update `config.json`:**
+   ```json
+   {
+     "modelPath": "./model_comparison/lstm_model.pkl",
+     "logging": {
+       "enabled": true,
+       "logFile": "./data/training_logs/lstm_decisions_log.csv"
+     }
+   }
    ```
+
+2. **Restart backend and frontend**, use application for 15-20 minutes
+3. **Save CSV** to `data/training_logs/lstm_decisions_log.csv`
+
+**Merging Multiple Data Files:**
+If you have multiple CSV files from browser downloads:
+```bash
+cd backend
+python3 merge_training_data.py \
+  --data-dir ../data/training_logs \
+  --output parima_decisions_log.csv
+```
+
+**Training Both Models:**
+```bash
+cd backend
+python3 compare_models.py \
+  --data ../data/training_logs/parima_decisions_log.csv \
+  --output-dir ../model_comparison
+```
+
+See `COLLECT_TRAINING_DATA.md` for detailed collection guide.
+
+### Automatic Training
+
+The PARIMA backend now supports **automatic model retraining**! The system can automatically retrain models in the background based on collected data.
+
+**Enable Automatic Training:**
+
+1. **Update `config.json`:**
+   ```json
+   {
+     "parima": {
+       "training": {
+         "autoTrain": true,
+         "autoTrainIntervalHours": 24,
+         "minSamplesForTraining": 100,
+         "modelType": "random_forest",
+         "trainingLogFile": "./data/training_logs/training_history.log"
+       }
+     }
+   }
+   ```
+
+2. **Restart backend** - Automatic training thread starts automatically
+
+3. **Monitor training status:**
+   ```bash
+   curl http://localhost:5001/api/parima/training/status
+   ```
+
+**Manual Training:**
+
+Trigger training manually via API:
+```bash
+curl -X POST http://localhost:5001/api/parima/train
+```
+
+**Training History:**
+
+All training events are logged to `training_history.log`:
+- Training start/completion events
+- Accuracy metrics
+- Sample counts
+- Error messages
+
+See `AUTOMATIC_TRAINING_GUIDE.md` for complete details.
 
 ### PARIMA Features Collected
 
@@ -298,12 +417,6 @@ timestamp,frustumCoverage,occlusionRatio,meanVisibleDistance,deviceFPS,deviceCPU
 ```bash
 # Verify all components
 npm run parima:verify
-
-# Test model loading
-npm run parima:test
-
-# Test API endpoints
-npm run parima:test-api
 ```
 
 **Full Integration Test:**
@@ -314,7 +427,14 @@ npm run parima:test-api
 5. Load a VTP file
 6. Watch for PARIMA decision logs
 
-For detailed testing instructions, see `backend/TESTING.md`.
+**Check Training Status:**
+```bash
+# Get training status and history
+curl http://localhost:5001/api/parima/training/status
+
+# Check health (includes training info)
+curl http://localhost:5001/health
+```
 
 ---
 
@@ -369,10 +489,43 @@ npm run build
 
 # PARIMA Backend
 npm run parima:backend      # Start backend API server
-npm run parima:test         # Test model integration
-npm run parima:test-api     # Test API endpoints
 npm run parima:verify       # Verify setup
 ```
+
+### Backend API Endpoints
+
+The PARIMA backend provides the following REST API endpoints:
+
+**Health Check:**
+```bash
+GET /health
+```
+Returns backend status, model loading status, and training information.
+
+**Prediction:**
+```bash
+POST /api/parima/predict
+```
+Sends feature vector and receives LOD prediction.
+
+**Manual Training:**
+```bash
+POST /api/parima/train
+```
+Trigger model training manually. Optional body:
+```json
+{
+  "force": false,
+  "csv_path": "/path/to/custom.csv",
+  "model_type": "random_forest"
+}
+```
+
+**Training Status:**
+```bash
+GET /api/parima/training/status
+```
+Get current training status, history, and configuration.
 
 ### Adding New Features
 
@@ -391,6 +544,8 @@ npm run parima:verify       # Verify setup
 - Check Python console output
 - Test API with: `curl http://localhost:5001/health`
 - View API logs for errors
+- Check training status: `curl http://localhost:5001/api/parima/training/status`
+- View training history: `tail -n 20 data/training_logs/training_history.log`
 
 ---
 
@@ -406,7 +561,9 @@ npm run parima:verify       # Verify setup
 
 2. **Verify model file exists:**
    ```bash
-   ls -l ml_models/PARIMA/model_checkpoint.pkl
+   ls -l model_comparison/random_forest_model.pkl
+   # or
+   ls -l model_comparison/lstm_model.pkl
    ```
 
 3. **Check browser console** for error messages
@@ -440,7 +597,17 @@ PORT=5001 python3 backend/parima_api.py
 1. **Check Python version:** `python3 --version` (should be 3.7+)
 2. **Install dependencies:** `pip3 install -r backend/requirements.txt`
 3. **Check data format:** CSV should have correct column headers
-4. **See training guide:** `backend/README_TRAINING.md`
+4. **Verify models exist:**
+   ```bash
+   ls -lh model_comparison/*.pkl
+   ```
+5. **See training guide:** `backend/README_TRAINING.md`
+6. **For model comparison:** See `MODEL_COMPARISON_GUIDE.md`
+7. **For automatic training:** See `AUTOMATIC_TRAINING_GUIDE.md`
+8. **Check training logs:**
+   ```bash
+   tail -n 20 data/training_logs/training_history.log
+   ```
 
 ---
 
@@ -449,7 +616,9 @@ PORT=5001 python3 backend/parima_api.py
 - **Main README**: This file
 - **Implementation Details**: `CURRENT_IMP.md`
 - **Training Guide**: `backend/README_TRAINING.md`
-- **Testing Guide**: `backend/TESTING.md`
+- **Data Collection Guide**: `COLLECT_TRAINING_DATA.md` and `DATA_COLLECTION_GUIDE.md`
+- **Model Comparison Guide**: `MODEL_COMPARISON_GUIDE.md`
+- **Automatic Training Guide**: `AUTOMATIC_TRAINING_GUIDE.md`
 
 ---
 
@@ -485,7 +654,7 @@ PORT=5001 python3 backend/parima_api.py
 - [ ] Advanced feature engineering
 - [ ] Model versioning system
 - [ ] Performance analytics dashboard
-- [ ] Auto-retraining pipeline
+- [x] Auto-retraining pipeline (✅ Implemented)
 - [ ] Cloud-based model serving
 
 ---
@@ -500,4 +669,15 @@ For issues, questions, or contributions:
 ---
 
 **Last Updated**: 2024
-**Version**: 1.0.0
+**Version**: 1.1.0
+
+---
+
+## 🆕 Recent Updates
+
+### Version 1.1.0
+- ✅ **Automatic Training**: Background auto-retraining based on collected data
+- ✅ **Training History Logging**: Comprehensive event logging for all training activities
+- ✅ **Model Comparison**: Enhanced comparison tools for RandomForest vs LSTM
+- ✅ **Additional Tools**: New diagnostic and utility scripts (diagnose_model.py, gpu_metrics.py, generate_synthetic_dataset.py)
+- ✅ **Improved Documentation**: Multiple specialized guides for different use cases

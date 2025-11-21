@@ -11,6 +11,12 @@ let fpsHistory = [];
 let lastFrameTime = null;
 let viewportHistorySize = 10;
 
+// GPU metrics caching
+let lastGPUMetrics = null;
+let gpuMetricsCacheTime = 0;
+const GPU_CACHE_DURATION = 1000; // Cache for 1 second
+let gpuMetricsAPIUrl = null;
+
 /**
  * Initialize feature extractor with required VTK.js objects
  * @param {Object} vtkObjects - Object containing camera, renderer, actor references
@@ -180,7 +186,8 @@ function getDeviceFPS() {
   
   // Return average of recent FPS
   const avgFps = fpsHistory.reduce((sum, val) => sum + val, 0) / fpsHistory.length;
-  return Math.max(1.0, Math.min(120.0, avgFps)); // Clamp to reasonable range
+  //console.log('Raw FPS:', fps, 'Average FPS:', avgFps, 'Delta:', deltaTime);
+  return Math.max(1.0, avgFps); // Clamp to reasonable range
 }
 
 /**
@@ -205,6 +212,89 @@ function getDeviceCPULoad() {
     console.warn('CPU load estimation failed:', error);
     return 0.5; // Default
   }
+}
+
+/**
+ * Initialize GPU metrics API URL
+ * @param {string} apiUrl - Base API URL (e.g., from PARIMA config)
+ */
+export function initializeGPUMetrics(apiUrl) {
+  // Extract base URL from PARIMA API URL
+  if (apiUrl) {
+    try {
+      const url = new URL(apiUrl);
+      gpuMetricsAPIUrl = `${url.protocol}//${url.host}/api/system/gpu`;
+    } catch (error) {
+      console.warn('Failed to parse API URL for GPU metrics:', error);
+      gpuMetricsAPIUrl = null;
+    }
+  }
+}
+
+/**
+ * Get GPU load from system (macOS) via backend API
+ * @returns {Promise<number|null>} GPU usage percentage or null
+ */
+async function getGPULoadFromSystem() {
+  // Check cache
+  const now = Date.now();
+  if (now - gpuMetricsCacheTime < GPU_CACHE_DURATION && lastGPUMetrics !== null) {
+    return lastGPUMetrics;
+  }
+  
+  if (!gpuMetricsAPIUrl) {
+    return null;
+  }
+  
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 500); // 500ms timeout
+    
+    const response = await fetch(gpuMetricsAPIUrl, {
+      method: 'GET',
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (response.ok) {
+      const data = await response.json();
+      
+      if (data.success && data.available && data.gpu_usage !== null) {
+        lastGPUMetrics = data.gpu_usage;
+        gpuMetricsCacheTime = now;
+        return data.gpu_usage;
+      }
+    }
+  } catch (error) {
+    // Backend not available, timeout, or error
+    // Silently fail and use fallback estimation
+    if (error.name !== 'AbortError') {
+      console.debug('GPU metrics API not available:', error.message);
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Get GPU load with fallback to estimation
+ * @returns {Promise<number>} GPU load percentage (0-100)
+ */
+export async function getDeviceGPULoad() {
+  // Try to get real GPU metrics from system
+  const systemGPU = await getGPULoadFromSystem();
+  if (systemGPU !== null) {
+    return systemGPU;
+  }
+  
+  // Fallback to estimation based on FPS and CPU
+  const cpuLoad = getDeviceCPULoad();
+  const fps = getDeviceFPS();
+  const fpsRatio = fps / 60.0;
+  const estimatedGPU = Math.min(100, Math.max(0, (1.0 - fpsRatio) * 100 + (cpuLoad * 30)));
+  
+  return estimatedGPU;
 }
 
 /**
@@ -271,9 +361,9 @@ function updateViewportTrajectory() {
 
 /**
  * Collect all features for PARIMA prediction
- * @returns {Object} Feature dictionary
+ * @returns {Promise<Object>} Feature dictionary
  */
-export function collectFeatures() {
+export async function collectFeatures() {
   // Update viewport trajectory
   updateViewportTrajectory();
   
@@ -285,6 +375,7 @@ export function collectFeatures() {
   // Collect device metrics
   const deviceFPS = getDeviceFPS();
   const deviceCPULoad = getDeviceCPULoad();
+  const deviceGPULoad = await getDeviceGPULoad(); // Now async!
   
   // Prepare viewport trajectory
   const trajectory = viewportHistory.map(state => ({
@@ -299,6 +390,7 @@ export function collectFeatures() {
     meanVisibleDistance,
     deviceFPS,
     deviceCPULoad,
+    deviceGPULoad, // Add GPU load
     viewportTrajectory: trajectory
   };
 }

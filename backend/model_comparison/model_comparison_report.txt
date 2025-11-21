@@ -1,0 +1,73 @@
+================================================================================
+PARIMA (RandomForest) vs LSTM Model Comparison
+================================================================================
+
+Generated: 2025-11-11 17:58:43
+
+TRAINING DATA
+--------------------------------------------------------------------------------
+Total samples: 192
+Features: 35
+LOD distribution:
+  LOD 0: 3 (1.6%)
+  LOD 2: 44 (22.9%)
+  LOD 3: 25 (13.0%)
+  LOD 4: 120 (62.5%)
+
+RANDOM FOREST (PARIMA) RESULTS
+--------------------------------------------------------------------------------
+Accuracy: 0.8974
+Training samples: 153
+Test samples: 39
+Model path: ./model_comparison/random_forest_model.pkl
+
+Test Set Distribution:
+  LOD 0: 1 (2.6%)
+  LOD 2: 9 (23.1%)
+  LOD 3: 5 (12.8%)
+  LOD 4: 24 (61.5%)
+
+LSTM RESULTS
+--------------------------------------------------------------------------------
+Single Split Accuracy: 0.5946
+Training samples: 145
+Test samples: 37
+Model path: ./model_comparison/lstm_model.pkl
+
+Cross-Validation Results (5 folds):
+  Mean Accuracy: 0.5200
+  Std Deviation: 0.2713
+  Min Accuracy: 0.0000
+  Max Accuracy: 0.8000
+
+  Fold Details:
+    Fold 1: 0.6000 (Test: 30 samples)
+    Fold 2: 0.0000 (Test: 30 samples)
+    Fold 3: 0.8000 (Test: 30 samples)
+    Fold 4: 0.6000 (Test: 30 samples)
+    Fold 5: 0.6000 (Test: 30 samples)
+
+Test Set Distribution (Single Split):
+  LOD 2: 2 (5.4%)
+  LOD 3: 13 (35.1%)
+  LOD 4: 22 (59.5%)
+
+⚠️  Warnings:
+  ⚠️  Test set missing 1 class(es) present in training
+
+COMPARISON
+--------------------------------------------------------------------------------
+Single Split Accuracy Difference: -0.3028 (LSTM - RandomForest)
+RandomForest advantage: +50.93%
+
+LSTM Cross-Validation Mean: 0.5200 (±0.2713)
+CV vs RandomForest: -0.3774
+
+RECOMMENDATION
+--------------------------------------------------------------------------------
+✅ RandomForest performs better - current PARIMA is optimal
+   Benefits: Faster inference, smaller model size, simpler
+
+⚠️  LSTM Test Set Issues:
+   ⚠️  Test set missing 1 class(es) present in training
+   → Single split accuracy may be unreliable

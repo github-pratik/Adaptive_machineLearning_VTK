@@ -9,6 +9,14 @@ export class Logger {
     this.logEntries = [];
     this.initialized = false;
     this.maxBufferSize = 100; // Buffer entries before download
+    // Memory peak tracking
+    this.memoryPeakMB = 0;
+    this.jsHeapPeakMB = 0;
+    // LOD change tracking for adaptation metrics
+    this.previousLOD = null;
+    this.lodChangeCount = 0;
+    // FPS history for stability calculation
+    this.fpsHistory = [];
   }
 
   /**
@@ -24,6 +32,7 @@ export class Logger {
       'meanVisibleDistance',
       'deviceFPS',
       'deviceCPULoad',
+      'deviceGPULoad',
       'viewportVelocity',
       'viewportAcceleration',
       'viewportAngularVelocity',
@@ -31,11 +40,36 @@ export class Logger {
       'decisionTiles',
       'latencyMs',
       'fpsAfterDecision',
-      'memoryMB'
+      'memoryMB',           // Current tile memory
+      'jsHeapMemoryMB',     // Current JS heap memory
+      'memoryPeakMB',       // Peak tile memory seen
+      'jsHeapPeakMB',       // Peak JS heap memory seen
+      'fpsImprovement',     // (fpsAfterDecision - deviceFPS) / deviceFPS * 100
+      'qualityScore',       // (5 - decisionLOD) / 5.0 (0-1, higher = better quality)
+      'fpsPerGPUPercent',   // deviceFPS / deviceGPULoad (efficiency metric)
+      'fpsPerMemoryMB',     // deviceFPS / memoryMB (efficiency metric)
+      'inAcceptableRange',  // 1 if fps >= 30, else 0
+      'lodChangeFromPrevious' // 1 if LOD changed, 0 if same
     ].join(',');
     
     this.logEntries.push(header);
     this.initialized = true;
+  }
+
+  /**
+   * Get current JavaScript heap memory
+   * @returns {number} Memory in MB, or 0 if unavailable
+   */
+  getJSHeapMemory() {
+    try {
+      if (performance.memory) {
+        const memInfo = performance.memory;
+        return memInfo.usedJSHeapSize / (1024 * 1024); // Convert to MB
+      }
+    } catch (error) {
+      // Performance API not available
+    }
+    return 0;
   }
 
   /**
@@ -55,6 +89,66 @@ export class Logger {
     const decisionLOD = decision.lod !== undefined ? decision.lod : -1;
     const decisionTiles = decision.tiles ? decision.tiles.join(';') : '';
     
+    // Get current JS heap memory
+    const jsHeapMemoryMB = this.getJSHeapMemory();
+    
+    // Track memory peaks
+    const currentMemoryMB = entryObj.memoryMB || 0;
+    if (currentMemoryMB > this.memoryPeakMB) {
+      this.memoryPeakMB = currentMemoryMB;
+    }
+    if (jsHeapMemoryMB > this.jsHeapPeakMB) {
+      this.jsHeapPeakMB = jsHeapMemoryMB;
+    }
+    
+    // Calculate PARIMA-supporting metrics
+    const deviceFPS = entryObj.deviceFPS || 0;
+    const fpsAfterDecision = entryObj.fpsAfterDecision || 0;
+    const deviceGPULoad = entryObj.deviceGPULoad || 0;
+    
+    // FPS Improvement: percentage change after decision
+    const fpsImprovement = (deviceFPS > 0 && fpsAfterDecision > 0)
+      ? ((fpsAfterDecision - deviceFPS) / deviceFPS * 100).toFixed(2)
+      : '';
+    
+    // Quality Score: (5 - LOD) / 5.0, where LOD 0 = highest quality (score 1.0)
+    const qualityScore = (decisionLOD !== -1 && decisionLOD >= 0 && decisionLOD <= 5)
+      ? ((5 - decisionLOD) / 5.0).toFixed(4)
+      : '';
+    
+    // FPS per GPU Percent: efficiency metric (higher = better)
+    const fpsPerGPUPercent = (deviceGPULoad > 0)
+      ? (deviceFPS / deviceGPULoad).toFixed(2)
+      : '';
+    
+    // FPS per Memory MB: efficiency metric (higher = better)
+    const fpsPerMemoryMB = (currentMemoryMB > 0)
+      ? (deviceFPS / currentMemoryMB).toFixed(2)
+      : '';
+    
+    // In Acceptable Range: 1 if FPS >= 30, else 0
+    const inAcceptableRange = (deviceFPS >= 30) ? '1' : '0';
+    
+    // LOD Change from Previous: 1 if changed, 0 if same
+    let lodChangeFromPrevious = '0';
+    if (this.previousLOD !== null && decisionLOD !== -1) {
+      if (this.previousLOD !== decisionLOD) {
+        lodChangeFromPrevious = '1';
+        this.lodChangeCount++;
+      }
+    }
+    if (decisionLOD !== -1) {
+      this.previousLOD = decisionLOD;
+    }
+    
+    // Track FPS for stability calculation (keep last 30)
+    if (deviceFPS > 0) {
+      this.fpsHistory.push(deviceFPS);
+      if (this.fpsHistory.length > 30) {
+        this.fpsHistory.shift();
+      }
+    }
+    
     // Format features
     const row = [
       timestamp,
@@ -63,6 +157,7 @@ export class Logger {
       entryObj.meanVisibleDistance !== undefined ? entryObj.meanVisibleDistance.toFixed(2) : '',
       entryObj.deviceFPS !== undefined ? entryObj.deviceFPS.toFixed(2) : '',
       entryObj.deviceCPULoad !== undefined ? entryObj.deviceCPULoad.toFixed(4) : '',
+      entryObj.deviceGPULoad !== undefined ? entryObj.deviceGPULoad.toFixed(2) : '',
       lastTrajectory.velocity !== undefined ? lastTrajectory.velocity.toFixed(4) : '',
       lastTrajectory.acceleration !== undefined ? lastTrajectory.acceleration.toFixed(4) : '',
       lastTrajectory.angularVelocity !== undefined ? lastTrajectory.angularVelocity.toFixed(4) : '',
@@ -70,7 +165,16 @@ export class Logger {
       decisionTiles,
       entryObj.latencyMs !== undefined ? entryObj.latencyMs.toFixed(2) : '',
       entryObj.fpsAfterDecision !== undefined ? entryObj.fpsAfterDecision.toFixed(2) : '',
-      entryObj.memoryMB !== undefined ? entryObj.memoryMB.toFixed(2) : ''
+      currentMemoryMB.toFixed(2),                    // Current tile memory
+      jsHeapMemoryMB.toFixed(2),                     // Current JS heap memory
+      this.memoryPeakMB.toFixed(2),                  // Peak tile memory
+      this.jsHeapPeakMB.toFixed(2),                  // Peak JS heap memory
+      fpsImprovement,                                 // FPS improvement %
+      qualityScore,                                   // Quality score (0-1)
+      fpsPerGPUPercent,                              // FPS per GPU %
+      fpsPerMemoryMB,                                // FPS per MB
+      inAcceptableRange,                             // In acceptable FPS range
+      lodChangeFromPrevious                          // LOD changed from previous
     ].join(',');
     
     this.logEntries.push(row);
@@ -121,6 +225,61 @@ export class Logger {
   clear() {
     this.logEntries = [];
     this.initialized = false;
+    this.resetMemoryPeaks();
+  }
+
+  /**
+   * Get memory peak statistics
+   * @returns {Object} Memory peak stats
+   */
+  getMemoryPeaks() {
+    return {
+      tileMemoryPeakMB: this.memoryPeakMB,
+      jsHeapPeakMB: this.jsHeapPeakMB,
+      totalPeakMB: this.memoryPeakMB + this.jsHeapPeakMB
+    };
+  }
+
+  /**
+   * Reset memory peaks (useful for new test sessions)
+   */
+  resetMemoryPeaks() {
+    this.memoryPeakMB = 0;
+    this.jsHeapPeakMB = 0;
+    this.previousLOD = null;
+    this.lodChangeCount = 0;
+    this.fpsHistory = [];
+  }
+  
+  /**
+   * Calculate FPS stability (coefficient of variation)
+   * Lower value = more stable FPS
+   * @returns {number} Coefficient of variation, or 0 if insufficient data
+   */
+  getFPSStability() {
+    if (this.fpsHistory.length < 2) return 0;
+    
+    const mean = this.fpsHistory.reduce((sum, val) => sum + val, 0) / this.fpsHistory.length;
+    if (mean === 0) return 0;
+    
+    const variance = this.fpsHistory.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / this.fpsHistory.length;
+    const stdDev = Math.sqrt(variance);
+    
+    // Coefficient of variation = stdDev / mean
+    return stdDev / mean;
+  }
+  
+  /**
+   * Get adaptation statistics
+   * @returns {Object} Adaptation stats
+   */
+  getAdaptationStats() {
+    const totalEntries = this.logEntries.length - 1; // Subtract header
+    return {
+      lodChangeCount: this.lodChangeCount,
+      adaptationFrequency: totalEntries > 0 ? (this.lodChangeCount / totalEntries) : 0,
+      fpsStability: this.getFPSStability()
+    };
   }
 
   /**

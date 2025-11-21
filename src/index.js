@@ -43,7 +43,7 @@ import { P } from '@kitware/vtk.js/Common/Core/Math/index';
 import * as tf from '@tensorflow/tfjs';
 
 // PARIMA integration modules
-import { initializeFeatureExtractor, collectFeatures, resetFeatureExtractor } from './feature_extractor.js';
+import { initializeFeatureExtractor, collectFeatures, resetFeatureExtractor, initializeGPUMetrics } from './feature_extractor.js';
 import { PARIMAAdapter } from '../ml_adapter/parima_adapter.js';
 import { TileManager } from './tile_manager.js';
 import { Logger } from './logger.js';
@@ -302,12 +302,12 @@ function startMetricsUpdate() {
   
   const updateInterval = 500; // Update every 500ms
   
-  metricsUpdateInterval = setInterval(() => {
+  metricsUpdateInterval = setInterval(async () => {
     if (!metricsElements) return;
     
     try {
-      // Get current features
-      const features = collectFeatures();
+      // Get current features (now async)
+      const features = await collectFeatures();
       
       // Update FPS
       const fps = features.deviceFPS || 0;
@@ -326,11 +326,8 @@ function startMetricsUpdate() {
       metricsElements.distance.textContent = distance.toFixed(1);
       metricsElements.distance.style.color = '#2196F3'; // Blue
       
-      // Update GPU Load (estimated from CPU load and FPS)
-      // GPU load is estimated as: inverse of FPS ratio + memory pressure
-      const cpuLoad = features.deviceCPULoad || 0;
-      const fpsRatio = fps / 60.0; // Normalize to 60 FPS
-      const gpuLoad = Math.min(100, Math.max(0, (1.0 - fpsRatio) * 100 + (cpuLoad * 30)));
+      // Update GPU Load (use real GPU if available, otherwise estimate)
+      const gpuLoad = features.deviceGPULoad || 0;
       metricsElements.gpu.textContent = gpuLoad.toFixed(1);
       // Color code: green < 50%, yellow 50-75%, red > 75%
       if (gpuLoad < 50) {
@@ -1529,6 +1526,7 @@ let tileManager = null;
 let parimaLogger = null;
 let parimaEnabled = false;
 let parimaStreamingInterval = null;
+let baselineLoggingInterval = null;
 let lastDecisionTime = null;
 let usingTiles = false; // Track if we're using tile-based streaming
 
@@ -2506,6 +2504,9 @@ async function initializeApplication() {
       // Initialize PARIMA adapter
       parimaAdapter = new PARIMAAdapter(parimaConfig.parima.apiUrl);
       const modelAvailable = await parimaAdapter.init();
+      
+      // Initialize GPU metrics API URL
+      initializeGPUMetrics(parimaConfig.parima.apiUrl);
       if (modelAvailable) {
         logSuccess('PARIMA model loaded successfully');
         parimaEnabled = true;
@@ -2539,6 +2540,33 @@ async function initializeApplication() {
     }
   } else {
     logInfo('PARIMA adaptive streaming disabled in configuration');
+    
+    // Initialize logger for baseline data collection if logging is enabled
+    if (parimaConfig && parimaConfig.parima && parimaConfig.parima.logging && parimaConfig.parima.logging.enabled) {
+      try {
+        // Initialize feature extractor for baseline metrics
+        initializeFeatureExtractor(
+          { camera, renderer, actor },
+          { viewportHistorySize: parimaConfig.parima.viewportHistorySize || 10 }
+        );
+        
+        // Initialize logger
+        parimaLogger = new Logger(parimaConfig.parima.logging.logFile);
+        parimaLogger.onFlushCallback = (result) => {
+          logSuccess(`📥 ${result}`);
+          logInfo('Check your browser downloads folder or save dialog for the CSV file');
+        };
+        
+        // Initialize GPU metrics API URL for baseline logging
+        if (parimaConfig.parima.apiUrl) {
+          initializeGPUMetrics(parimaConfig.parima.apiUrl);
+        }
+        
+        logProgress('Baseline metrics logging enabled (PARIMA disabled)');
+      } catch (error) {
+        logError(`Baseline logging initialization failed: ${error.message}`);
+      }
+    }
   }
   
   // Setup UI controls
@@ -2577,8 +2605,8 @@ async function performPARIMADecision() {
   try {
     const startTime = performance.now();
     
-    // Collect features
-    const features = collectFeatures();
+    // Collect features (now async)
+    const features = await collectFeatures();
     
     // Get decision from PARIMA model
     const decision = await parimaAdapter.predictDecision(features);
@@ -2591,7 +2619,8 @@ async function performPARIMADecision() {
       
       // Log decision if logging enabled (REGARDLESS of tile loading success)
       if (parimaLogger) {
-        const fpsAfter = collectFeatures().deviceFPS;
+        const featuresAfter = await collectFeatures();
+        const fpsAfter = featuresAfter.deviceFPS;
         const memoryMB = tileManager ? tileManager.getMemoryUsage() : 0;
         
         // Get current entry count before adding new entry
@@ -2609,12 +2638,18 @@ async function performPARIMADecision() {
         // Get updated entry count after adding
         const newCount = parimaLogger.logEntries.length - 1; // Subtract header
         
-        // Show entry count
-        logSuccess(`PARIMA decision logged: LOD ${decision.lod}, FPS: ${fpsAfter.toFixed(1)}, Memory: ${memoryMB.toFixed(1)}MB (Entries: ${newCount})`);
+        // Show memory peaks periodically
+        if (newCount % 20 === 0) {
+          const peaks = parimaLogger.getMemoryPeaks();
+          logSuccess(`PARIMA decision logged: LOD ${decision.lod}, FPS: ${fpsAfter.toFixed(1)}, Memory: ${memoryMB.toFixed(1)}MB, Peak: ${peaks.tileMemoryPeakMB.toFixed(1)}MB, JS Heap Peak: ${peaks.jsHeapPeakMB.toFixed(1)}MB (Entries: ${newCount})`);
+        } else {
+          logSuccess(`PARIMA decision logged: LOD ${decision.lod}, FPS: ${fpsAfter.toFixed(1)}, Memory: ${memoryMB.toFixed(1)}MB (Entries: ${newCount})`);
+        }
         
         // Check if buffer is full (100 entries) and notify
         if (newCount >= 100 && newCount % 100 === 0) {
-          logSuccess(`✅ CSV buffer full! (${newCount} entries) CSV file should download automatically...`);
+          const peaks = parimaLogger.getMemoryPeaks();
+          logSuccess(`✅ CSV buffer full! (${newCount} entries) Memory Peak: ${peaks.tileMemoryPeakMB.toFixed(1)}MB, JS Heap Peak: ${peaks.jsHeapPeakMB.toFixed(1)}MB CSV file should download automatically...`);
         }
       }
     }
@@ -2679,10 +2714,84 @@ function stopPARIMAStreaming() {
   }
 }
 
+/**
+ * Perform baseline metrics logging (without PARIMA decisions)
+ */
+async function performBaselineLogging() {
+  if (!parimaLogger) return;
+  
+  try {
+    // Collect features (same as PARIMA, but no decision) - now async
+    const features = await collectFeatures();
+    
+    // Get current FPS
+    const fpsAfter = features.deviceFPS;
+    const memoryMB = 0; // Baseline doesn't track tile memory (no tiles loaded)
+    
+    // Log baseline metrics with fixed LOD (e.g., LOD 2 as default)
+    parimaLogger.logEntry({
+      timestamp: Date.now(),
+      ...features,
+      decision: { lod: 2 }, // Fixed LOD for baseline (no adaptation)
+      latencyMs: 0, // No API call for baseline
+      fpsAfterDecision: fpsAfter,
+      memoryMB: memoryMB
+    });
+    
+    const currentCount = parimaLogger.logEntries.length - 1;
+    
+    // Show entry count periodically with memory peaks
+    if (currentCount % 20 === 0) {
+      const peaks = parimaLogger.getMemoryPeaks();
+      logSuccess(`Baseline metrics logged: FPS: ${fpsAfter.toFixed(1)}, Entries: ${currentCount}, JS Heap Peak: ${peaks.jsHeapPeakMB.toFixed(1)}MB`);
+    }
+    
+    // Check if buffer is full
+    if (currentCount >= 100 && currentCount % 100 === 0) {
+      const peaks = parimaLogger.getMemoryPeaks();
+      logSuccess(`✅ CSV buffer full! (${currentCount} entries) JS Heap Peak: ${peaks.jsHeapPeakMB.toFixed(1)}MB CSV file should download automatically...`);
+    }
+  } catch (error) {
+    logWarning(`Baseline logging failed: ${error.message}`);
+  }
+}
+
+/**
+ * Start baseline logging loop
+ */
+function startBaselineLogging() {
+  if (!parimaLogger || !parimaConfig) return;
+  
+  const intervalMs = parimaConfig.parima.featureSampleIntervalMs || 3000;
+  
+  // Clear existing interval if any
+  if (baselineLoggingInterval) {
+    clearInterval(baselineLoggingInterval);
+  }
+  
+  // Start periodic logging loop
+  baselineLoggingInterval = setInterval(() => {
+    performBaselineLogging();
+  }, intervalMs);
+  
+  logInfo(`Baseline metrics logging started (interval: ${intervalMs}ms)`);
+}
+
+/**
+ * Stop baseline logging loop
+ */
+function stopBaselineLogging() {
+  if (baselineLoggingInterval) {
+    clearInterval(baselineLoggingInterval);
+    baselineLoggingInterval = null;
+  }
+}
+
 // Set up cleanup on page unload
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
     stopPARIMAStreaming();
+    stopBaselineLogging();
     stopMetricsUpdate();
     cleanupTensors();
     
@@ -2698,6 +2807,9 @@ initializeApplication().then(() => {
   // Start PARIMA streaming after initialization
   if (parimaEnabled) {
     startPARIMAStreaming();
+  } else if (parimaLogger && parimaConfig && parimaConfig.parima && parimaConfig.parima.logging && parimaConfig.parima.logging.enabled) {
+    // Start baseline logging loop if PARIMA disabled but logging enabled
+    startBaselineLogging();
   }
 });
 

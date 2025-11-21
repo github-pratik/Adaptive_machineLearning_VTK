@@ -12,6 +12,18 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 import argparse
 
+# TensorFlow imports for LSTM
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.utils import to_categorical
+    from tensorflow.keras.callbacks import EarlyStopping
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+    print("Warning: TensorFlow not available. LSTM model will not work.")
+
 def load_training_data(csv_path):
     """
     Load training data from CSV log file
@@ -156,27 +168,59 @@ def generate_synthetic_data(n_samples=1000):
     
     return X, y
 
-def train_model(X, y, model_type='random_forest', output_path='../ml_models/PARIMA/model_checkpoint.pkl'):
+def prepare_sequences(X, y, sequence_length=10):
+    """
+    Prepare sequences for LSTM training from time-series data
+    
+    Args:
+        X: Feature matrix (n_samples, n_features)
+        y: Target labels (n_samples,)
+        sequence_length: Length of sequence (time steps)
+        
+    Returns:
+        X_sequences: (n_samples - sequence_length, sequence_length, n_features)
+        y_sequences: (n_samples - sequence_length,)
+    """
+    if len(X) < sequence_length:
+        raise ValueError(f"Need at least {sequence_length} samples for sequence preparation, got {len(X)}")
+    
+    X_sequences = []
+    y_sequences = []
+    
+    for i in range(sequence_length, len(X)):
+        X_sequences.append(X[i-sequence_length:i])
+        y_sequences.append(y[i])
+    
+    return np.array(X_sequences), np.array(y_sequences)
+
+def train_model(X, y, model_type='random_forest', output_path='../ml_models/PARIMA/model_checkpoint.pkl', verbose=True):
     """
     Train a model to predict LOD levels
     
     Args:
         X: Feature matrix
         y: Target labels
-        model_type: Type of model ('random_forest', 'svm', 'logistic')
+        model_type: Type of model ('random_forest', 'svm', 'logistic', 'lstm')
         output_path: Where to save the trained model
+        verbose: Whether to print training progress
         
     Returns:
-        Trained model
+        Dictionary with:
+            - model: Trained model
+            - accuracy: Test accuracy
+            - n_samples: Number of training samples
+            - n_test_samples: Number of test samples
+            - model_path: Path where model was saved
     """
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    print(f"Training samples: {len(X_train)}")
-    print(f"Test samples: {len(X_test)}")
-    print(f"Feature dimensions: {X.shape[1]}")
+    if verbose:
+        print(f"Training samples: {len(X_train)}")
+        print(f"Test samples: {len(X_test)}")
+        print(f"Feature dimensions: {X.shape[1]}")
     
     # Train model
     if model_type == 'random_forest':
@@ -192,49 +236,174 @@ def train_model(X, y, model_type='random_forest', output_path='../ml_models/PARI
     elif model_type == 'logistic':
         from sklearn.linear_model import LogisticRegression
         model = LogisticRegression(random_state=42, max_iter=1000, class_weight='balanced')
-    else:
+    elif model_type == 'lstm':
+        if not TENSORFLOW_AVAILABLE:
+            raise ValueError("TensorFlow not available. Install with: pip install tensorflow")
+        
+        from sklearn.preprocessing import StandardScaler
+        
+        # Prepare sequence data
+        sequence_length = 10  # Use last 10 samples as sequence
+        if len(X) < sequence_length + 20:  # Need enough samples
+            raise ValueError(f"Need at least {sequence_length + 20} samples for LSTM, got {len(X)}")
+        
+        X_sequences, y_sequences = prepare_sequences(X, y, sequence_length)
+        
+        # Normalize features (important for LSTM)
+        scaler = StandardScaler()
+        # Reshape for scaling, then reshape back
+        n_samples, n_timesteps, n_features = X_sequences.shape
+        X_flat = X_sequences.reshape(-1, n_features)
+        X_scaled_flat = scaler.fit_transform(X_flat)
+        X_sequences_scaled = X_scaled_flat.reshape(n_samples, n_timesteps, n_features)
+        
+        # Split data (maintain temporal order for time series)
+        split_idx = int(len(X_sequences_scaled) * 0.8)
+        X_train_seq = X_sequences_scaled[:split_idx]
+        X_test_seq = X_sequences_scaled[split_idx:]
+        y_train_seq = y_sequences[:split_idx]
+        y_test_seq = y_sequences[split_idx:]
+        
+        # Convert labels to categorical (one-hot encoding)
+        n_classes = 6  # LOD levels 0-5
+        y_train_cat = to_categorical(y_train_seq, n_classes)
+        y_test_cat = to_categorical(y_test_seq, n_classes)
+        
+        if verbose:
+            print(f"\nLSTM Sequence Data:")
+            print(f"  Sequence length: {sequence_length}")
+            print(f"  Training sequences: {len(X_train_seq)}")
+            print(f"  Test sequences: {len(X_test_seq)}")
+            print(f"  Features per timestep: {n_features}")
+        
+        # Build LSTM model
+        model = Sequential([
+            LSTM(64, return_sequences=True, input_shape=(sequence_length, n_features)),
+            Dropout(0.2),
+            LSTM(32, return_sequences=False),
+            Dropout(0.2),
+            Dense(16, activation='relu'),
+            Dense(n_classes, activation='softmax')
+        ])
+        
+        model.compile(
+            optimizer='adam',
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        if verbose:
+            print("\nLSTM Model Architecture:")
+            model.summary()
+            print("\nTraining LSTM model...")
+        
+        # Train with early stopping
+        early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+        
+        history = model.fit(
+            X_train_seq, y_train_cat,
+            epochs=50,
+            batch_size=32,
+            validation_data=(X_test_seq, y_test_cat),
+            callbacks=[early_stop],
+            verbose=1 if verbose else 0
+        )
+        
+        # Evaluate
+        test_loss, test_accuracy = model.evaluate(X_test_seq, y_test_cat, verbose=0)
+        accuracy = test_accuracy
+        
+        # Get predictions for classification report
+        y_pred_probs = model.predict(X_test_seq, verbose=0)
+        y_pred = np.argmax(y_pred_probs, axis=1)
+        
+        if verbose:
+            print(f"\nLSTM Model Accuracy: {accuracy:.4f}")
+            print("\nClassification Report:")
+            unique_classes = sorted(np.unique(np.concatenate([y_test_seq, y_pred])))
+            target_names = [f'LOD {cls}' for cls in unique_classes]
+            print(classification_report(y_test_seq, y_pred, target_names=target_names, labels=unique_classes))
+        
+        # Save model with scaler and metadata (LSTM needs these for inference)
+        model_package = {
+            'model': model,
+            'scaler': scaler,
+            'sequence_length': sequence_length,
+            'model_type': 'lstm',
+            'n_features': n_features,
+            'n_classes': n_classes
+        }
+        
+        # Save to file
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'wb') as f:
+            pickle.dump(model_package, f)
+        
+        if verbose:
+            print(f"\nLSTM model saved to: {output_path}")
+            print("  (Includes model, scaler, and sequence metadata)")
+        
+        return {
+            'model': model_package,
+            'accuracy': float(accuracy),
+            'n_samples': len(X_train_seq),
+            'n_test_samples': len(X_test_seq),
+            'model_path': output_path
+        }
+    
+    # Scikit-learn models (random_forest, svm, logistic)
+    if model_type not in ['random_forest', 'svm', 'logistic']:
         raise ValueError(f"Unknown model type: {model_type}")
     
-    print(f"\nTraining {model_type} model...")
+    if verbose:
+        print(f"\nTraining {model_type} model...")
     model.fit(X_train, y_train)
     
     # Evaluate
     y_pred = model.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
     
-    print(f"\nModel Accuracy: {accuracy:.4f}")
-    print("\nClassification Report:")
-    # Get unique classes present in test data (support up to 6 LOD levels)
-    unique_classes = sorted(np.unique(np.concatenate([y_test, y_pred])))
-    target_names = [f'LOD {cls}' for cls in unique_classes]
-    print(classification_report(y_test, y_pred, target_names=target_names, labels=unique_classes))
-    
-    # Also show distribution of predictions
-    unique_pred, counts_pred = np.unique(y_pred, return_counts=True)
-    print("\nPrediction Distribution:")
-    for lod, count in zip(unique_pred, counts_pred):
-        print(f"  LOD {lod}: {count} predictions ({100*count/len(y_pred):.1f}%)")
-    
-    # Feature importance (if available)
-    if hasattr(model, 'feature_importances_'):
-        importances = model.feature_importances_
-        top_indices = np.argsort(importances)[-5:][::-1]
-        print("\nTop 5 Most Important Features:")
-        feature_names = [
-            'frustumCoverage', 'occlusionRatio', 'meanVisibleDistance',
-            'deviceFPS', 'deviceCPULoad'
-        ] + [f'traj_{i//3}_{["vel","acc","ang"][i%3]}' for i in range(30)]
-        for idx in top_indices:
-            print(f"  {feature_names[idx]}: {importances[idx]:.4f}")
+    if verbose:
+        print(f"\nModel Accuracy: {accuracy:.4f}")
+        print("\nClassification Report:")
+        # Get unique classes present in test data (support up to 6 LOD levels)
+        unique_classes = sorted(np.unique(np.concatenate([y_test, y_pred])))
+        target_names = [f'LOD {cls}' for cls in unique_classes]
+        print(classification_report(y_test, y_pred, target_names=target_names, labels=unique_classes))
+        
+        # Also show distribution of predictions
+        unique_pred, counts_pred = np.unique(y_pred, return_counts=True)
+        print("\nPrediction Distribution:")
+        for lod, count in zip(unique_pred, counts_pred):
+            print(f"  LOD {lod}: {count} predictions ({100*count/len(y_pred):.1f}%)")
+        
+        # Feature importance (if available)
+        if hasattr(model, 'feature_importances_'):
+            importances = model.feature_importances_
+            top_indices = np.argsort(importances)[-5:][::-1]
+            print("\nTop 5 Most Important Features:")
+            feature_names = [
+                'frustumCoverage', 'occlusionRatio', 'meanVisibleDistance',
+                'deviceFPS', 'deviceCPULoad'
+            ] + [f'traj_{i//3}_{["vel","acc","ang"][i%3]}' for i in range(30)]
+            for idx in top_indices:
+                print(f"  {feature_names[idx]}: {importances[idx]:.4f}")
     
     # Save model
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'wb') as f:
         pickle.dump(model, f)
     
-    print(f"\nModel saved to: {output_path}")
+    if verbose:
+        print(f"\nModel saved to: {output_path}")
     
-    return model
+    return {
+        'model': model,
+        'accuracy': float(accuracy),
+        'n_samples': len(X_train),
+        'n_test_samples': len(X_test),
+        'model_path': output_path
+    }
 
 def main():
     parser = argparse.ArgumentParser(description='Train PARIMA LOD prediction model')
@@ -245,7 +414,7 @@ def main():
     parser.add_argument('--samples', type=int, default=1000,
                         help='Number of synthetic samples (if using --synthetic)')
     parser.add_argument('--model-type', type=str, default='random_forest',
-                        choices=['random_forest', 'svm', 'logistic'],
+                        choices=['random_forest', 'svm', 'logistic', 'lstm'],
                         help='Type of model to train')
     parser.add_argument('--output', type=str,
                         default='../ml_models/PARIMA/model_checkpoint.pkl',
@@ -270,9 +439,12 @@ def main():
         return
     
     # Train model
-    model = train_model(X, y, model_type=args.model_type, output_path=args.output)
+    result = train_model(X, y, model_type=args.model_type, output_path=args.output)
     
     print("\nTraining complete!")
+    print(f"Model Accuracy: {result['accuracy']:.4f}")
+    print(f"Training Samples: {result['n_samples']}")
+    print(f"Test Samples: {result['n_test_samples']}")
     print(f"\nTo use this model:")
     print(f"1. Make sure the model file is at: {args.output}")
     print(f"2. Restart the backend: PORT=5001 python3 backend/parima_api.py")

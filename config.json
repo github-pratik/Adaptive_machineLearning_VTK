@@ -2,7 +2,7 @@
   "parima": {
     "enabled": true,
     "apiUrl": "http://localhost:5001/api/parima/predict",
-    "modelPath": "./ml_models/PARIMA/model_checkpoint.pkl",
+    "modelPath": "./model_comparison/random_forest_model.pkl",
     "featureSampleIntervalMs": 3000,
     "viewportHistorySize": 10,
     "tiles": {
@@ -11,8 +11,15 @@
     },
     "logging": {
       "enabled": false,
-      "logFile": "parima_decisions_log.csv"
+      "logFile": "./data/training_logs/parima_decisions_log.csv"
+    },
+    "training": {
+      "autoTrain": true,
+      "autoTrainIntervalHours": 0.0833,
+      "minSamplesForTraining": 100,
+      "logFile": "./data/training_logs/parima_decisions_log.csv",
+      "modelType": "random_forest",
+      "trainingLogFile": "./data/training_logs/training_history.log"
     }
   }
 }
-
