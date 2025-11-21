@@ -2,7 +2,7 @@
 
 **A web-based, real-time collaborative platform for immersive scientific data visualization and analysis with intelligent adaptive streaming.**
 
-
+CIA_Web leverages **VTK.js**, **WebXR**, **TensorFlow.js**, and **PARIMA** (Predictive Adaptive Rendering for Immersive Media Applications) to support multi-user interaction, high-dimensional data exploration, and intelligent Level-of-Detail (LOD) management in both desktop and VR environments.
 
 ---
 
@@ -32,8 +32,8 @@
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
-   cd Machine_CIA_Web-main
+   git clone https://github.com/github-pratik/Adaptive_machineLearning_VTK.git
+   cd Adaptive_machineLearning_VTK
    ```
 
 2. **Install Node.js dependencies:**
@@ -227,14 +227,16 @@ Edit `config.json` to configure PARIMA:
       "lodLevels": ["lod0", "lod1", "lod2", "lod3", "lod4", "lod5"]
     },
     "logging": {
-      "enabled": true,
+      "enabled": false,
       "logFile": "./data/training_logs/parima_decisions_log.csv"
     },
     "training": {
-      "autoTrain": false,
+      "autoTrain": true,
+      "autoTrainIntervalHours": 0.0833,
       "minSamplesForTraining": 100,
       "logFile": "./data/training_logs/parima_decisions_log.csv",
-      "modelType": "random_forest"
+      "modelType": "random_forest",
+      "trainingLogFile": "./data/training_logs/training_history.log"
     }
   }
 }
@@ -457,6 +459,11 @@ The application includes a **real-time metrics dashboard** integrated into the l
 
 **Updates every 500ms** with live values from the visualization.
 
+**Metrics Collection:**
+- FPS is calculated using a smoothed average over multiple frames
+- GPU Load is estimated from FPS and memory pressure (browser limitations prevent direct GPU access)
+- Distance is computed from camera position to model center
+
 ---
 
 ## 📈 Dimensionality Reduction
@@ -574,12 +581,13 @@ Get current training status, history, and configuration.
 
 ### Tiles Not Loading
 
-- **Tile files not implemented yet**: Currently in development
-- System works without tiles using fallback LOD decisions
+- **Tile system structure is implemented** but tile files need to be generated manually
+- System works without tiles using fallback LOD decisions based on model decimation
 - To implement tiles:
-  1. Create tile directory structure
-  2. Generate LOD versions of your models
-  3. Place tiles in `tiles/{model_name}/lod{N}/`
+  1. Generate LOD versions of your VTP models (decimation/reduction)
+  2. Create tile directory structure: `tiles/{model_name}/lod{N}/`
+  3. Place tile files in appropriate directories
+  4. Update `config.json` with correct `tiles.basePath`
 
 ### Port Conflicts
 
@@ -634,7 +642,7 @@ PORT=5001 python3 backend/parima_api.py
 
 ## 📄 License
 
-[Add your license information here]
+This project is part of academic research. Please refer to the repository for license information.
 
 ---
 
@@ -649,13 +657,15 @@ PORT=5001 python3 backend/parima_api.py
 
 ## 🔮 Future Enhancements
 
-- [ ] Frustum-based tile selection
-- [ ] Automated tile generation tools
-- [ ] Advanced feature engineering
+- [ ] Frustum-based tile selection for optimized loading
+- [ ] Automated tile generation tools from VTP files
+- [ ] Advanced feature engineering (GPU-specific metrics when available)
 - [ ] Model versioning system
-- [ ] Performance analytics dashboard
+- [ ] Performance analytics dashboard with historical data
 - [x] Auto-retraining pipeline (✅ Implemented)
 - [ ] Cloud-based model serving
+- [ ] Real-time collaboration enhancements
+- [ ] Advanced VR interaction modes
 
 ---
 
@@ -668,7 +678,7 @@ For issues, questions, or contributions:
 
 ---
 
-**Last Updated**: 2024
+**Last Updated**: December 2024
 **Version**: 1.1.0
 
 ---
@@ -676,8 +686,34 @@ For issues, questions, or contributions:
 ## 🆕 Recent Updates
 
 ### Version 1.1.0
-- ✅ **Automatic Training**: Background auto-retraining based on collected data
+- ✅ **Automatic Training**: Background auto-retraining based on collected data (default: every 5 minutes)
 - ✅ **Training History Logging**: Comprehensive event logging for all training activities
-- ✅ **Model Comparison**: Enhanced comparison tools for RandomForest vs LSTM
+- ✅ **Model Comparison**: Enhanced comparison tools for RandomForest vs LSTM with visualization plots
 - ✅ **Additional Tools**: New diagnostic and utility scripts (diagnose_model.py, gpu_metrics.py, generate_synthetic_dataset.py)
 - ✅ **Improved Documentation**: Multiple specialized guides for different use cases
+- ✅ **LSTM Support**: Full support for LSTM models with sequence history management
+- ✅ **Real-Time Metrics**: Enhanced metrics dashboard with color-coded performance indicators
+
+### Current Implementation Status
+
+**✅ Fully Implemented:**
+- Backend Flask API with model loading and prediction
+- Automatic background training with configurable intervals
+- Model comparison system (RandomForest vs LSTM)
+- Feature extraction (35 features: 5 base + 30 trajectory)
+- Real-time metrics dashboard (FPS, GPU, Distance)
+- Decision logging with CSV export
+- Training history logging
+- Multiple model types support (RandomForest, LSTM, SVM, Logistic Regression)
+- Synthetic data generation for testing
+- Data merging utilities
+
+**⚠️ Partially Implemented:**
+- Tile system (structure ready, files need manual generation)
+- GPU metrics (estimated from FPS/memory, direct GPU access not available in browsers)
+
+**📋 Architecture:**
+- Frontend: VTK.js for 3D rendering, TensorFlow.js for dimensionality reduction
+- Backend: Python Flask API with scikit-learn and TensorFlow models
+- Communication: RESTful API with JSON payloads
+- Data Flow: Feature extraction → API request → Model prediction → LOD decision → Rendering
